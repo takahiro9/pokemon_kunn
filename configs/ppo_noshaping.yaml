@@ -1,0 +1,17 @@
+# Ablation: terminal reward only (everything else as ppo_default.yaml).
+run_name: ppo-noshaping
+seed: 1
+total_timesteps: 5_000_000
+num_envs: 16
+num_steps: 256
+num_minibatches: 8
+target_kl: 0.05
+snapshot_every_updates: 25
+checkpoint_every_updates: 25
+env:
+  battle_format: gen9championsrandombattlelv50
+  reward: {victory: 1.0, fainted: 0.0, hp: 0.0}
+curriculum:
+  - {until_step: 300_000, mix: {random: 0.5, max_power: 0.5}}
+  - {until_step: 1_500_000, mix: {max_power: 0.3, heuristic: 0.7}}
+  - {mix: {heuristic: 0.2, latest: 0.4, pool: 0.4}}

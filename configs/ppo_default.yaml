@@ -1,0 +1,35 @@
+# Phase 1 baseline run. Goal: >=60% vs SimpleHeuristicsPlayer (500 battles).
+run_name: ppo
+seed: 1
+device: auto
+total_timesteps: 5_000_000
+num_envs: 16          # parallel Showdown connections (one subprocess each)
+num_steps: 256        # rollout length per env -> batch 4096
+learning_rate: 2.5e-4
+anneal_lr: true
+gamma: 0.99
+gae_lambda: 0.95
+num_minibatches: 8
+update_epochs: 4
+clip_coef: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 0.5
+target_kl: 0.05
+snapshot_every_updates: 25     # self-play pool snapshot every ~100k steps
+checkpoint_every_updates: 25
+pool_size: 20
+env:
+  battle_format: gen9championsrandombattlelv50
+  # Terminal +-1 plus small shaping. Ablation: set fainted/hp to 0.
+  reward: {victory: 1.0, fainted: 0.05, hp: 0.05}
+model:
+  d_model: 128
+  n_layers: 2
+  n_heads: 4
+# 1) bootstrap on weak baselines  2) heuristic  3) self-play (latest 50% / past 50%)
+# with a heuristic anchor so we keep measuring the Phase 1 target.
+curriculum:
+  - {until_step: 300_000, mix: {random: 0.5, max_power: 0.5}}
+  - {until_step: 1_500_000, mix: {max_power: 0.3, heuristic: 0.7}}
+  - {mix: {heuristic: 0.2, latest: 0.4, pool: 0.4}}

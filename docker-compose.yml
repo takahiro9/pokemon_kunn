@@ -1,0 +1,56 @@
+services:
+  showdown:
+    build:
+      context: ./docker/server
+      args:
+        # Branch, tag or commit of smogon/pokemon-showdown to build.
+        PS_VERSION: master
+    image: pokemon-showdown:local
+    container_name: pokemon-showdown
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/config:/app/config
+      - ./data/databases:/app/databases
+      # logs/repl holds runtime debug unix sockets, not log files - it is
+      # intentionally left unmounted (some bind-mount backends, e.g. macOS
+      # Docker Desktop's VirtioFS, can't chmod socket files). Only the
+      # actual log output directories are persisted.
+      - ./data/logs/chat:/app/logs/chat
+      - ./data/logs/modlog:/app/logs/modlog
+      - ./data/logs/tickets:/app/logs/tickets
+    environment:
+      TZ: "Asia/Tokyo"
+    # --no-security turns on nothrottle / noguestsecurity / noipchecks. It is
+    # required for RL training: without nothrottle the server rejects any
+    # challenge sent <10s after the previous one ("probable misclick"), which
+    # stalls env resets. Local-only use - do not expose this server publicly.
+    # To run on a different internal port, e.g. ["start", "9000", "--no-security"]
+    # ...and update `ports` and config/config.js's `exports.port` to match.
+    command: ["start", "--no-security"]
+    healthcheck:
+      # Node has booted and is actually accepting connections on 8000, not
+      # just that the container process has started.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8000/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  client:
+    build:
+      context: ./docker/client
+    image: pokemon-showdown-client:local
+    container_name: pokemon-showdown-client
+    depends_on:
+      showdown:
+        condition: service_healthy
+    environment:
+      SHOWDOWN_HOST: showdown
+      SHOWDOWN_PORT: "8000"
+      BATTLE_FORMAT: gen9championsrandombattle
+      N_BATTLES: "1"
+    # `main.py` runs two poke-env RandomPlayer bots against each other as a
+    # smoke test. Swap in your own script/agent by overriding `command`, e.g.:
+    # command: ["python", "my_bot.py"]

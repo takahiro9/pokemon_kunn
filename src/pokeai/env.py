@@ -1,0 +1,129 @@
+"""Gymnasium environment around poke-env's SinglesEnv (roadmap Phase 1 step 1).
+
+``PokemonEnv`` adds our observation encoding and (optionally shaped) reward.
+``make_env`` builds a single-agent env whose opponent is re-sampled from an
+opponent mix at every reset, which is what the PPO trainer runs in parallel
+subprocesses. The opponent mix can be changed at runtime through
+``AsyncVectorEnv.call("set_opponent_mix", ...)`` for curriculum / self-play.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+import gymnasium as gym
+import numpy as np
+from gymnasium.spaces import Box
+from poke_env.battle import AbstractBattle
+from poke_env.environment import SingleAgentWrapper, SinglesEnv
+
+from pokeai import encoding
+from pokeai.opponents import OpponentFactory
+from pokeai.server import account, server_configuration
+
+
+@dataclass
+class RewardConfig:
+    """Terminal ±victory, plus optional dense shaping (roadmap 0.3, ablation)."""
+
+    victory: float = 1.0
+    fainted: float = 0.0
+    hp: float = 0.0
+    status: float = 0.0
+
+    @classmethod
+    def from_dict(cls, d: Optional[dict]) -> "RewardConfig":
+        return cls(**(d or {}))
+
+
+class PokemonEnv(SinglesEnv):
+    def __init__(self, *, reward: RewardConfig = RewardConfig(), **kwargs: Any):
+        super().__init__(**kwargs)
+        self.reward_cfg = reward
+        space = Box(-np.inf, np.inf, shape=(encoding.OBS_DIM,), dtype=np.float32)
+        self.observation_spaces = {agent: space for agent in self.possible_agents}
+
+    def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
+        return encoding.encode_battle(battle)
+
+    def calc_reward(self, battle: AbstractBattle) -> float:
+        r = self.reward_cfg
+        return self.reward_computing_helper(
+            battle,
+            fainted_value=r.fainted,
+            hp_value=r.hp,
+            status_value=r.status,
+            victory_value=r.victory,
+        )
+
+
+class OpponentMixEnv(gym.Wrapper):
+    """Single-agent view of PokemonEnv with an opponent sampled per episode.
+
+    Exposes a flat ``Dict(observation, action_mask)`` space (as produced by
+    PokeEnv) and reports the battle outcome in ``info`` on the final step.
+    """
+
+    def __init__(self, env: SingleAgentWrapper, factory: OpponentFactory, mix: dict):
+        super().__init__(env)
+        self.factory = factory
+        self.mix: dict[str, float] = dict(mix)
+        self.current_opponent = ""
+
+    def set_opponent_mix(self, mix: dict, pool: Optional[list[str]] = None) -> None:
+        self.mix = dict(mix)
+        if pool is not None:
+            self.factory.set_pool(pool)
+
+    def _sample_opponent(self) -> None:
+        names, weights = zip(*[(k, v) for k, v in self.mix.items() if v > 0])
+        name = random.choices(names, weights=weights)[0]
+        self.env.opponent = self.factory.get(name)
+        self.current_opponent = name
+
+    def reset(self, **kwargs):
+        self._sample_opponent()
+        obs, info = self.env.reset(**kwargs)
+        info["opponent"] = self.current_opponent
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(np.int64(action))
+        info = dict(info)
+        if terminated or truncated:
+            battle = self.env.env.battle1
+            info["battle_won"] = float(bool(battle.won))
+            info["battle_turns"] = float(battle.turn)
+            info["opponent"] = self.current_opponent
+        return obs, reward, terminated, truncated, info
+
+
+@dataclass
+class EnvConfig:
+    battle_format: str = encoding.DEFAULT_FORMAT
+    reward: dict = field(default_factory=dict)
+    opponent_mix: dict = field(default_factory=lambda: {"random": 1.0})
+
+
+def make_env(cfg: EnvConfig, index: int = 0, device: str = "cpu"):
+    """Return a thunk for gymnasium vector envs (each runs in its own process)."""
+
+    def _thunk() -> gym.Env:
+        env = PokemonEnv(
+            reward=RewardConfig.from_dict(cfg.reward),
+            battle_format=cfg.battle_format,
+            server_configuration=server_configuration(),
+            account_configuration1=account(f"ppo{index}"),
+            account_configuration2=account(f"opp{index}"),
+            # Masked policies never pick illegal actions, but fall back to a
+            # random legal move instead of crashing a long training run.
+            strict=False,
+            start_listening=True,
+        )
+        factory = OpponentFactory(cfg.battle_format, device=device)
+        single = SingleAgentWrapper(env, factory.get("random"))
+        return OpponentMixEnv(single, factory, cfg.opponent_mix)
+
+    return _thunk

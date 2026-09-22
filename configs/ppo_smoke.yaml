@@ -1,0 +1,16 @@
+# Pipeline smoke test (~2-3 min): exercises the curriculum switch, self-play
+# snapshots, checkpointing and TensorBoard logging. Not meant to learn anything.
+run_name: ppo-smoke
+num_envs: 4
+num_steps: 64
+total_timesteps: 2048
+num_minibatches: 4
+update_epochs: 2
+snapshot_every_updates: 2
+checkpoint_every_updates: 4
+env:
+  battle_format: gen9championsrandombattlelv50
+  reward: {victory: 1.0, fainted: 0.05, hp: 0.05}
+curriculum:
+  - {until_step: 1024, mix: {random: 0.5, max_power: 0.5}}
+  - {mix: {heuristic: 0.4, latest: 0.3, pool: 0.3}}
