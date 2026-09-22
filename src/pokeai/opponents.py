@@ -169,14 +169,17 @@ def make_policy_player(
     max_concurrent_battles: int = 1,
     server_configuration=None,
     name: Optional[str] = None,
+    account_configuration=None,
+    **kwargs,
 ) -> PolicyPlayer:
     model, _ = load_checkpoint(checkpoint, device)
     return PolicyPlayer(
         model=model,
         deterministic=deterministic,
         device=device,
-        account_configuration=account(name or "agent"),
+        account_configuration=account_configuration or account(name or "agent"),
         battle_format=battle_format,
         server_configuration=server_configuration,
         max_concurrent_battles=max_concurrent_battles,
+        **kwargs,
     )

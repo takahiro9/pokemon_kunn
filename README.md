@@ -274,6 +274,35 @@ uv run python -m pokeai.evaluate --round-robin runs/a/checkpoints/latest.pt runs
 結果はチェックポイントと同じフォルダに `eval_bench_*.json` / `eval_rr_*.json` として保存されます。
 Phase 1 の目標は **heuristic に 500 戦で勝率 60% 以上**です。
 
+### 実際に対戦する（`pokeai.play`）
+
+`evaluate.py` はスクリプト同士の自動対戦ですが、`play.py` は学習済みモデルを 1 体だけ
+Showdown サーバに接続し、人間や他のクライアントと実際に対戦させるためのコマンドです。
+
+```sh
+# サーバ起動（未起動なら）
+docker compose up -d showdown
+
+# 1) ブラウザから挑戦を待ち受ける（人間 vs モデル）
+uv run python -m pokeai.play accept runs/<run>/checkpoints/latest.pt --username mybot -n 5
+# → http://localhost:8000 を開き、フォーマット「[Gen 9 Champions] Random Battle (Lv50)」で
+#   ユーザー名 "mybot" に Challenge を送る
+
+# 2) 特定の相手（ユーザー名）に挑戦する
+uv run python -m pokeai.play challenge runs/<run>/checkpoints/latest.pt SomeUsername -n 3
+
+# 3) ラダーに潜る
+uv run python -m pokeai.play ladder runs/<run>/checkpoints/latest.pt -n 10
+```
+
+既定ではローカルの Docker サーバ（`pokeai.server`、学習用フォーマットが存在するのはここだけ）に、
+`--username` を指定しない場合はランダムなゲスト名で接続します（`--no-security` 構成なのでパスワード不要）。
+`--server showdown` で本家公開サーバ（play.pokemonshowdown.com）に接続することもできますが、
+学習用のカスタムフォーマット（Lv50 Flat Rules）は公開サーバには存在しないため、その場合は
+`--format gen9randombattle` のように向こうに実在するフォーマットを指定し、ラダーに参加するなら
+登録済みアカウントの `--username`/`--password` も指定してください。`--deterministic` でサンプリングせず
+最大確率の行動を選ばせられます（対人戦では推奨）。
+
 ### どうやって実現しているか（学習の流れ）
 
 1. **並列環境の起動**（`ppo.py` → `env.make_env`）
@@ -314,6 +343,7 @@ Phase 1 の目標は **heuristic に 500 戦で勝率 60% 以上**です。
 | `opponents.py` | 対戦相手（ルールベース・学習済みモデル・self-play プール）の生成 |
 | `ppo.py` | PPO 学習のメインスクリプト（`python -m pokeai.ppo`） |
 | `evaluate.py` | ベンチマーク評価と Elo 計算（`python -m pokeai.evaluate`） |
+| `play.py` | 学習済みモデルを実際に対戦させる CLI（`python -m pokeai.play`、[実際に対戦する](#実際に対戦するpokeaiplay)節を参照） |
 
 ### `encoding.py` — 観測エンコーディング
 
@@ -401,6 +431,17 @@ CleanRL 風の 1 ファイル完結の PPO 実装です。
   `--concurrency`（同時対戦数、既定 8）、`--deterministic`（サンプリングせず最大確率の行動を選ぶ）、`--opponents`（相手の指定）などのオプションがあります。
 - `round_robin`: 複数のエージェント（チェックポイントやベースライン）で総当たりし、Bradley-Terry モデルで Elo 風レーティングを推定（`random` を 1000 に固定）。
 - 学習時と違い Gymnasium 環境は使わず、poke-env の `Player` 同士を `battle_against()` で Showdown サーバ上で直接対戦させます。
+
+### `play.py` — 実戦投入
+
+`make_policy_player()` で作った `PolicyPlayer` を 1 体だけ Showdown サーバに接続し、
+`accept` / `challenge` / `ladder` の 3 サブコマンド（それぞれ poke-env の
+`accept_challenges()` / `send_challenges()` / `ladder()` をそのまま呼ぶ薄いラッパー）で
+実際の対戦を始めます。`--username`/`--password` を指定すると `make_policy_player()` に
+`account_configuration` として渡され（`opponents.py` 側でこの引数を追加）、既定のランダムな
+ゲスト名の代わりに固定名やパスワード付きの登録アカウントでログインできます。
+`--server` でローカル（既定）・本家公開サーバ・任意の `host:port` を切り替えます。
+使い方は [5 章「実際に対戦する」](#実際に対戦するpokeaiplay)を参照してください。
 
 ---
 
