@@ -5,10 +5,18 @@
 
 ## 概要
 
-- **対戦形式:** Pokémon Showdown の `[Gen 9 Champions] Random Battle`（フォーマット ID `gen9championsrandombattle`、
-  セットは [data/random-battles/champions](https://github.com/smogon/pokemon-showdown/tree/master/data/random-battles/champions)）。
-  - シングル 6vs6、チームはランダム生成、Lv 44〜60
-  - メガシンカあり／テラスタルなし、技の PP は最大 20（Champions 独自ルール）
+- **対戦形式:** `data/config/custom-formats.ts` で定義したカスタムフォーマット（フォーマット ID
+  `gen9championsrandombattlelv50`）。ベースは Showdown の `[Gen 9 Champions] Random Battle`
+  （チーム生成は [data/random-battles/champions](https://github.com/smogon/pokemon-showdown/tree/master/data/random-battles/champions)
+  のセットデータを使用）だが、そのままだと種族ごとに Lv 44〜60 とバラつくため、実際の Pokémon Champions の
+  ランクマ/大会ルール **Flat Rules** を追加で適用し、実機に近づけている。
+  - Flat Rules の内容: 全ポケモン **Lv50 固定**、チームプレビューあり、持ち物 1 種 1 匹まで、
+    幻・準伝説禁止、**6 匹選出して3匹を使用**（`Picked Team Size = 3`）
+  - チームは 6vs6 ではなく実質 3vs3（残り 3 匹はベンチのまま出せない）。メガシンカあり／テラスタルなし、
+    技の PP は最大 20（Champions 独自ルール）
+  - **注意:** どの 3 匹を選ぶか（チームプレビュー）は学習していない。poke-env の既定実装（シングルバトルでは
+    常にランダム選出）をそのまま使っているため、相手の見せ札を見て選出を変える、という実機さながらの戦略は
+    現状 AI が行っていない（6 章末の未対応タスク参照）
 - **行動空間:** poke-env の 26 アクション配置をそのまま使い、使えないものはマスクで禁止します。
 
   | アクション番号 | 意味 |
@@ -115,7 +123,7 @@ YAML 1 枚にまとめたものです。`python -m pokeai.ppo --config <ファ�
 
 | キー | 既定値 | 説明 |
 |---|---|---|
-| `battle_format` | `gen9championsrandombattle` | Showdown のフォーマット ID |
+| `battle_format` | `gen9championsrandombattlelv50` | Showdown のフォーマット ID（`data/config/custom-formats.ts` で定義した Lv50・Flat Rules 版） |
 | `reward.victory` | `1.0` | 勝ちで +victory、負けで −victory（最終報酬） |
 | `reward.fainted` | `0.0` | ひんしに対する途中報酬（相手をひんしにすると +、自分がひんしになると −） |
 | `reward.hp` | `0.0` | 両陣営の HP 割合に対する途中報酬 |
@@ -171,7 +179,8 @@ Python の学習コードは直接読みません。
 |---|---|
 | `config.js` | サーバ設定本体（ポート 8000 など）。`config-example.js` から 2 点を変更済み: `loginserver = null`（公式ログインサーバに問い合わせない）、`noguestsecurity = true`（パスワードなしで好きな名前のゲストとして入れる）。これで poke-env のボットが認証なしで接続できる |
 | `config-example.js` | 公式の設定テンプレート（比較・復元用） |
-| `formats.ts` | 対戦フォーマットの一覧。学習で使う `[Gen 9 Champions] Random Battle`（`mod: 'champions'`, `team: 'random'`）もここで定義されている |
+| `formats.ts` | 対戦フォーマットの一覧。ベースとなる `[Gen 9 Champions] Random Battle`（`mod: 'champions'`, `team: 'random'`）もここで定義されている |
+| `custom-formats.ts`（新規作成） | 学習で実際に使うカスタムフォーマット `[Gen 9 Champions] Random Battle (Lv50)`（ID `gen9championsrandombattlelv50`）。`ruleset: ['Flat Rules', 'Illusion Level Mod']` で、上のベースフォーマットに実機の Flat Rules（Lv50 固定・チームプレビュー・6 匹選出 3 匹使用など）を足したもの。サーバは起動時に `config/custom-formats.ts` を自動でコンパイル・マージするので（Showdown 本体の仕組み）、ファイルを置いて `docker compose restart showdown` するだけで有効になる |
 | `CUSTOM-RULES.md` | カスタムルールの書き方（公式ドキュメント） |
 | `chatrooms.json`, `avatars.json`, `suspects.json`, `chat-plugins/`, `ladders/`, `avatars/` | チャットルーム・アバター・ラダーなど、サーバ運営用の状態ファイル。学習には関係しない |
 | `hosts.csv`, `proxies.csv` | IP/ホストの分類リスト（荒らし対策用）。ローカル利用では実質未使用 |
@@ -374,3 +383,4 @@ CleanRL 風の 1 ファイル完結の PPO 実装です。
 - 履歴を扱う LSTM/GRU 版（現在のモデルは「これまでに判明した情報の累積」しか見ていない）
 - W&B ロギング（今は TensorBoard のみ）
 - スループットの改善（M2・16 環境で約 430 ステップ/秒。ボトルネックは Python 側）
+- チームプレビューでの選出学習: poke-env の既定実装（`random_teampreview`）はシングルバトルでは常にランダムに 3 匹を選ぶ。相手の見せ札を見て最適な 3 匹を選ぶには専用の行動ヘッドが必要で、未実装
