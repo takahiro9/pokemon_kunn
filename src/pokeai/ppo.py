@@ -28,6 +28,7 @@ import torch.nn as nn
 import yaml
 from torch.utils.tensorboard import SummaryWriter
 
+from pokeai import encoding
 from pokeai.env import EnvConfig, make_env
 from pokeai.model import N_ACTIONS, ActorCritic, ModelConfig, load_checkpoint, save_checkpoint
 
@@ -36,6 +37,22 @@ from pokeai.model import N_ACTIONS, ActorCritic, ModelConfig, load_checkpoint, s
 class Stage:
     until_step: Optional[int]  # None = until the end of training
     mix: dict
+
+
+@dataclass
+class _PendingTP:
+    """A Team Preview decision (TEAMPREVIEW_PICK sub-picks) awaiting its
+    episode's outcome. Rewards accumulate (discounted) from the moment the
+    picks were made until the episode ends, giving a Monte-Carlo return that
+    becomes the training target for all of that episode's picks."""
+
+    obs: np.ndarray
+    mask: np.ndarray
+    action: np.ndarray
+    logprob: np.ndarray
+    value: np.ndarray
+    ret: float = 0.0
+    disc: float = 1.0
 
 
 @dataclass
@@ -142,12 +159,31 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
     ep_returns = np.zeros(cfg.num_envs)
     return_hist: deque = deque(maxlen=200)
 
+    # Team Preview decisions (env.PokemonEnv._agent1_teampreview) are made
+    # once per episode, outside the regular obs/action/reward step loop, so
+    # they're tracked separately here and folded into the PPO batch as
+    # Monte-Carlo-return transitions once their episode finishes (see below).
+    pending_tp: dict[int, _PendingTP] = {}
+    tp_ready: list[_PendingTP] = []
+
+    def ingest_teampreview(infos: dict) -> None:
+        present = infos.get("_teampreview")
+        batch = infos.get("teampreview")
+        if present is None or batch is None:
+            return
+        for i in np.flatnonzero(present):
+            pending_tp[int(i)] = _PendingTP(
+                obs=batch["obs"][i], mask=batch["mask"][i], action=batch["action"][i],
+                logprob=batch["logprob"][i], value=batch["value"][i],
+            )
+
     def snapshot() -> None:
         path = pool_dir / f"step_{global_step:09d}.pt"
         save_checkpoint(path, agent, global_step=global_step)
         pool.append(str(path.resolve()))
         del pool[: -cfg.pool_size]
         envs.call("set_opponent_mix", current_mix, pool)
+        envs.call("reload_teampreview", str(path.resolve()))
 
     def save(path: Path) -> None:
         save_checkpoint(
@@ -156,7 +192,8 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
         )
 
     snapshot()  # pool is never empty, so "latest"/"pool" always resolve
-    next_obs, _ = envs.reset(seed=cfg.seed)
+    next_obs, next_infos = envs.reset(seed=cfg.seed)
+    ingest_teampreview(next_infos)
     next_o = torch.as_tensor(next_obs["observation"], device=device)
     next_m = torch.as_tensor(next_obs["action_mask"], dtype=torch.float32, device=device)
     next_done = torch.zeros(cfg.num_envs, device=device)
@@ -187,6 +224,10 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
             next_m = torch.as_tensor(obs["action_mask"], dtype=torch.float32, device=device)
             next_done = torch.as_tensor(done, dtype=torch.float32, device=device)
 
+            for i, tp in pending_tp.items():
+                tp.ret += tp.disc * float(reward[i])
+                tp.disc *= cfg.gamma
+
             ep_returns += reward
             final = infos.get("final_info", {})
             for i in np.flatnonzero(done):
@@ -195,6 +236,9 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
                 if final.get("_battle_won", np.zeros(cfg.num_envs, bool))[i]:
                     win_hist[str(final["opponent"][i])].append(final["battle_won"][i])
                     turns_hist.append(final["battle_turns"][i])
+                if int(i) in pending_tp:
+                    tp_ready.append(pending_tp.pop(int(i)))
+            ingest_teampreview(infos)
 
         # GAE
         with torch.no_grad():
@@ -217,12 +261,36 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
         b_actions, b_logprobs = actions.reshape(-1), logprobs.reshape(-1)
         b_adv, b_returns, b_values = advantages.reshape(-1), returns.reshape(-1), values.reshape(-1)
 
+        # Team Preview picks: episodes that finished during this update's
+        # rollout contribute Monte-Carlo-return transitions (advantage =
+        # return - value, i.e. GAE with lambda=1 for just these steps) into
+        # the same batch, reusing the switch head/value head unchanged.
+        n_tp = len(tp_ready) * encoding.TEAMPREVIEW_PICK
+        if tp_ready:
+            tp_obs = torch.as_tensor(np.concatenate([tp.obs for tp in tp_ready]), device=device)
+            tp_mask = torch.as_tensor(np.concatenate([tp.mask for tp in tp_ready]), device=device)
+            tp_actions = torch.as_tensor(np.concatenate([tp.action for tp in tp_ready]), device=device)
+            tp_logprobs = torch.as_tensor(np.concatenate([tp.logprob for tp in tp_ready]), device=device)
+            tp_values = torch.as_tensor(np.concatenate([tp.value for tp in tp_ready]), device=device)
+            tp_returns = torch.as_tensor(
+                np.repeat([tp.ret for tp in tp_ready], encoding.TEAMPREVIEW_PICK), dtype=torch.float32, device=device
+            )
+            b_obs = torch.cat([b_obs, tp_obs])
+            b_mask = torch.cat([b_mask, tp_mask])
+            b_actions = torch.cat([b_actions, tp_actions])
+            b_logprobs = torch.cat([b_logprobs, tp_logprobs])
+            b_values = torch.cat([b_values, tp_values])
+            b_returns = torch.cat([b_returns, tp_returns])
+            b_adv = torch.cat([b_adv, tp_returns - tp_values])
+            tp_ready.clear()
+
         agent.train()
         clipfracs = []
-        b_inds = np.arange(batch_size)
+        total = b_obs.shape[0]
+        b_inds = np.arange(total)
         for _epoch in range(cfg.update_epochs):
             np.random.shuffle(b_inds)
-            for s in range(0, batch_size, minibatch_size):
+            for s in range(0, total, minibatch_size):
                 mb = b_inds[s : s + minibatch_size]
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(
                     b_obs[mb], b_mask[mb], b_actions[mb]
@@ -273,6 +341,7 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
         w("losses/clipfrac", float(np.mean(clipfracs)), global_step)
         w("losses/explained_variance", explained_var, global_step)
         w("charts/SPS", sps, global_step)
+        w("charts/teampreview_episodes", n_tp / encoding.TEAMPREVIEW_PICK, global_step)
         if return_hist:
             w("charts/episodic_return", float(np.mean(return_hist)), global_step)
         if turns_hist:

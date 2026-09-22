@@ -14,9 +14,12 @@ instead of that base format's unrestricted 6v6 at per-species levels 44-60.
 Mega Evolution (no Terastal), PP capped at 20. Singles only. Legal actions are
 switch ×6 (masked down to the 2 non-active Pokémon actually picked at Team
 Preview, plus the active one), move ×4 and Mega + move ×4 (poke-env's
-26-action layout with everything else masked). Team Preview itself is
-**not** learned — poke-env always brings a random 3 of the 6 for singles
-battles (see Phase 1 backlog below).
+26-action layout with everything else masked). Team Preview (picking 3 of 6,
+in lead order, from our own revealed sets and the opponent's revealed
+species) is learned too: it reuses the same switch head/value head and is
+folded into PPO as a Monte-Carlo-return transition once each episode
+finishes (see `PokemonEnv._agent1_teampreview` in `src/pokeai/env.py`). The
+opponent side still brings poke-env's default random 3 of 6.
 
 ## Layout
 
@@ -78,4 +81,4 @@ Results are also saved as JSON next to the checkpoint. Phase 1 target:
 - LSTM/GRU variant for the history ablation (current model sees accumulated revealed info only)
 - W&B logging (TensorBoard only)
 - Throughput tuning: ~430 env steps/s with 16 envs on an M2; the Python side, not Showdown, is the bottleneck
-- Learned Team Preview: poke-env's built-in `random_teampreview` always brings a random 3 of 6 for singles battles; picking based on the opponent's revealed team (as a real Champions player would) needs a dedicated action head and isn't implemented
+- Opponent-side learned Team Preview: only our own agent's Team Preview pick is learned (see above); the opponent (baselines and self-play snapshots acting as `env.opponent`) still brings poke-env's default random 3 of 6, since `SingleAgentWrapper` only routes Team Preview through env actions for VGC. `PolicyPlayer.teampreview` (used for standalone evaluation/deployment) does use the learned pick.

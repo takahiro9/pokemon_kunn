@@ -46,6 +46,8 @@ CHAMPIONS_PP_CAP = 20
 N_TEAM = 6
 N_SLOTS = 2 * N_TEAM
 N_MOVES = 4
+TEAMPREVIEW_PICK = 3  # Champions Flat Rules: bring 6, pick 3
+N_ACTIONS = 26  # SinglesEnv.get_action_space_size(9): 6 switches + 4 moves x 5 (plain + 4 gimmicks)
 
 TYPES = list(PokemonType)
 STATUSES = list(Status)
@@ -138,10 +140,10 @@ GLOBAL_DIM = (
     len(WEATHERS)
     + len(FIELDS)
     + 2 * len(SIDE_CONDITIONS)
-    + 9  # turn, can_mega, used_mega, opp_used_mega, remaining x2, force_switch, trapped, wait
+    + 10  # turn, can_mega, used_mega, opp_used_mega, remaining x2, force_switch, trapped, wait, teampreview
 )
 POKEMON_NUM_DIM = (
-    8  # present, own, active, fainted, hp, revealed, is_mega, level
+    9  # present, own, active, fainted, hp, revealed, is_mega, level, selected_in_teampreview
     + len(STATUSES)
     + len(BOOST_KEYS)
     + len(TYPES)  # current types (updated on Mega Evolution)
@@ -220,6 +222,7 @@ def _encode_global(battle: AbstractBattle) -> list[float]:
             float(bool(getattr(battle, "force_switch", False))),
             float(bool(getattr(battle, "trapped", False))),
             float(bool(getattr(battle, "_wait", False))),
+            float(bool(getattr(battle, "teampreview", False))),
         ]
     )
 
@@ -236,6 +239,7 @@ def _encode_pokemon(mon: Pokemon, own: bool) -> list[float]:
             float(mon.revealed),
             float(is_mega(mon)),
             (mon.level or 100) / 100.0,
+            float(mon.selected_in_teampreview),
         ]
         + _one_hot(STATUSES, mon.status)
         + [mon.boosts.get(k, 0) / 6.0 for k in BOOST_KEYS]
@@ -327,3 +331,12 @@ def encode_battle(battle: AbstractBattle) -> np.ndarray:
             m = _O_MNUM + (slot * N_MOVES + j) * MOVE_NUM_DIM
             obs[m : m + MOVE_NUM_DIM] = _encode_move(move, mon, target, avail, champions)
     return obs
+
+
+def teampreview_action_mask(battle: AbstractBattle) -> list[int]:
+    """Action mask for a Team Preview pick: only switch slots (actions 0-5)
+    for own Pokemon not yet selected this preview are legal."""
+    own = list(battle.team.values())[:N_TEAM]
+    switches = [int(not mon.selected_in_teampreview) for mon in own]
+    switches += [0] * (N_TEAM - len(switches))
+    return switches + [0] * (N_ACTIONS - N_TEAM)

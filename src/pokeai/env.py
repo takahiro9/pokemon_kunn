@@ -16,11 +16,13 @@ from typing import Any, Optional
 import gymnasium as gym
 import numpy as np
 from gymnasium.spaces import Box
-from poke_env.battle import AbstractBattle
+from poke_env.battle import AbstractBattle, Battle
 from poke_env.environment import SingleAgentWrapper, SinglesEnv
+from poke_env.player import Player
 
 from pokeai import encoding
-from pokeai.opponents import OpponentFactory
+from pokeai.model import ActorCritic, load_checkpoint
+from pokeai.opponents import OpponentFactory, run_teampreview
 from pokeai.server import account, server_configuration
 
 
@@ -39,11 +41,48 @@ class RewardConfig:
 
 
 class PokemonEnv(SinglesEnv):
+    """poke-env's ``_EnvPlayer.teampreview`` only routes Team Preview through
+    learned actions for VGC; for singles it always brings a random 3 of 6
+    (see poke_env.environment.env._EnvPlayer._teampreview). We replace
+    ``agent1``'s Team Preview with a synchronous model-driven pick (mirroring
+    how ``PolicyPlayer`` already drives opponents synchronously) so it can be
+    learned, and treat the picks as ordinary switch actions (0-5) restricted
+    by ``teampreview_action_mask`` so no new model head is needed. The
+    opponent side (``agent2``) is unaffected and keeps poke-env's default
+    random Team Preview.
+    """
+
     def __init__(self, *, reward: RewardConfig = RewardConfig(), **kwargs: Any):
         super().__init__(**kwargs)
         self.reward_cfg = reward
         space = Box(-np.inf, np.inf, shape=(encoding.OBS_DIM,), dtype=np.float32)
         self.observation_spaces = {agent: space for agent in self.possible_agents}
+        self._teampreview_model: Optional[ActorCritic] = None
+        self._teampreview_device = "cpu"
+        self._pending_teampreview: Optional[dict] = None
+        self.agent1.teampreview = self._agent1_teampreview
+
+    def _agent1_teampreview(self, battle: AbstractBattle) -> str:
+        if self._teampreview_model is None:
+            return self.agent1.random_teampreview(battle)
+        result = run_teampreview(
+            self._teampreview_model, battle, self._teampreview_device, deterministic=False
+        )
+        self._pending_teampreview = {
+            "obs": result.obs,
+            "mask": result.mask,
+            "action": result.action,
+            "logprob": result.logprob,
+            "value": result.value,
+        }
+        return result.order
+
+    def reload_teampreview(self, path: str) -> None:
+        """Refresh agent1's Team Preview policy from a checkpoint on disk
+        (called periodically from the training process, like the self-play
+        pool's checkpoints)."""
+        model, _ = load_checkpoint(path, self._teampreview_device)
+        self._teampreview_model = model
 
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
         return encoding.encode_battle(battle)
@@ -57,6 +96,25 @@ class PokemonEnv(SinglesEnv):
             status_value=r.status,
             victory_value=r.victory,
         )
+
+    @staticmethod
+    def action_to_order(action, battle: Battle, fake: bool = False, strict: bool = True):
+        if battle.teampreview:
+            return Player.create_order(list(battle.team.values())[int(action)])
+        return SinglesEnv.action_to_order(action, battle, fake=fake, strict=strict)
+
+    @staticmethod
+    def get_action_mask(battle: Battle) -> list[int]:
+        if battle.teampreview:
+            return encoding.teampreview_action_mask(battle)
+        return SinglesEnv.get_action_mask(battle)
+
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
+        self._pending_teampreview = None
+        obs, infos = super().reset(seed, options)
+        if self._pending_teampreview is not None:
+            infos[self.agent1.username]["teampreview"] = self._pending_teampreview
+        return obs, infos
 
 
 class OpponentMixEnv(gym.Wrapper):
@@ -76,6 +134,9 @@ class OpponentMixEnv(gym.Wrapper):
         self.mix = dict(mix)
         if pool is not None:
             self.factory.set_pool(pool)
+
+    def reload_teampreview(self, path: str) -> None:
+        self.env.env.reload_teampreview(path)
 
     def _sample_opponent(self) -> None:
         names, weights = zip(*[(k, v) for k, v in self.mix.items() if v > 0])

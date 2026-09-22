@@ -84,7 +84,7 @@ def test_move_slots_match_move_actions(battle):
     assert mask[6:10] == [1, 0, 1, 0]
     assert mask[10:14] == [1, 0, 1, 0]  # mega + move
     assert sum(mask[14:]) == 0  # no z-move / dynamax / tera in Champions
-    assert _blocks(battle)["global"][-8] == 1.0  # can_mega_evolve
+    assert _blocks(battle)["global"][-9] == 1.0  # can_mega_evolve
 
 
 def test_opponent_partial_information(battle):
@@ -95,7 +95,7 @@ def test_opponent_partial_information(battle):
     assert cat[6, 1] == E.UNKNOWN_ID  # item not revealed yet
     assert (cat[6, 3:] == E.UNKNOWN_ID).all()  # no moves revealed yet
     # opponent's remaining count assumes unrevealed mons are alive
-    assert p["global"][-4] == pytest.approx(1.0)
+    assert p["global"][-5] == pytest.approx(1.0)
 
 
 def test_revealed_and_unknown_moves(battle):
@@ -118,10 +118,10 @@ def test_mega_evolution_updates_species_types_and_flags(battle):
     assert E.effective_species(mon) == "gyaradosmega" and E.is_mega(mon)
     assert before["pokemon_cat"][6, 0] != after["pokemon_cat"][6, 0]  # species id
     assert before["pokemon_num"][6, 6] == 0 and after["pokemon_num"][6, 6] == 1  # is_mega
-    types = slice(8 + len(E.STATUSES) + len(E.BOOST_KEYS), 8 + len(E.STATUSES) + len(E.BOOST_KEYS) + len(E.TYPES))
+    types = slice(9 + len(E.STATUSES) + len(E.BOOST_KEYS), 9 + len(E.STATUSES) + len(E.BOOST_KEYS) + len(E.TYPES))
     dark = E.TYPES.index(PokemonType.DARK)
     assert before["pokemon_num"][6][types][dark] == 0 and after["pokemon_num"][6][types][dark] == 1
-    assert after["global"][-6] == 1.0  # opponent_used_mega_evolve
+    assert after["global"][-7] == 1.0  # opponent_used_mega_evolve
 
 
 def test_champions_pp(battle):

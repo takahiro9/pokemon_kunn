@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -30,6 +31,58 @@ BASELINES = {
     "max_power": MaxBasePowerPlayer,
     "heuristic": SimpleHeuristicsPlayer,
 }
+
+
+@dataclass
+class TeampreviewResult:
+    """One Team Preview decision: the ``/team`` order plus the per-pick
+    transitions (own Pokemon slot chosen, in order) for training."""
+
+    order: str
+    obs: np.ndarray  # (TEAMPREVIEW_PICK, OBS_DIM)
+    mask: np.ndarray  # (TEAMPREVIEW_PICK, N_ACTIONS)
+    action: np.ndarray  # (TEAMPREVIEW_PICK,) int64, own-team slot indices
+    logprob: np.ndarray  # (TEAMPREVIEW_PICK,)
+    value: np.ndarray  # (TEAMPREVIEW_PICK,)
+
+
+@torch.no_grad()
+def run_teampreview(
+    model: ActorCritic, battle: AbstractBattle, device="cpu", deterministic: bool = False
+) -> TeampreviewResult:
+    """Pick TEAMPREVIEW_PICK of our 6 Pokemon (in lead order) via the model's
+    switch head, reusing the normal switch-action distribution: masked down to
+    not-yet-picked own Pokemon and re-run TEAMPREVIEW_PICK times, marking each
+    pick as ``_selected_in_teampreview`` before the next so the mask/obs shrink."""
+    team = list(battle.team.values())
+    obs_list, mask_list, actions, logprobs, values = [], [], [], [], []
+    picks: list[int] = []
+    for _ in range(encoding.TEAMPREVIEW_PICK):
+        obs = encoding.encode_battle(battle)
+        mask = np.asarray(encoding.teampreview_action_mask(battle), dtype=np.float32)
+        action, logprob, _, value = model.get_action_and_value(
+            torch.as_tensor(obs, device=device).unsqueeze(0),
+            torch.as_tensor(mask, device=device).unsqueeze(0),
+            deterministic=deterministic,
+        )
+        idx = int(action.item())
+        team[idx]._selected_in_teampreview = True
+        picks.append(idx)
+        obs_list.append(obs)
+        mask_list.append(mask)
+        actions.append(idx)
+        logprobs.append(float(logprob.item()))
+        values.append(float(value.item()))
+    remaining = [i for i in range(len(team)) if i not in picks]
+    order = "".join(str(i + 1) for i in picks + remaining)
+    return TeampreviewResult(
+        order=f"/team {order}",
+        obs=np.stack(obs_list).astype(np.float32),
+        mask=np.stack(mask_list).astype(np.float32),
+        action=np.array(actions, dtype=np.int64),
+        logprob=np.array(logprobs, dtype=np.float32),
+        value=np.array(values, dtype=np.float32),
+    )
 
 
 class PolicyPlayer(Player):
@@ -57,6 +110,9 @@ class PolicyPlayer(Player):
         return SinglesEnv.action_to_order(
             np.int64(action.item()), battle, fake=False, strict=False
         )
+
+    def teampreview(self, battle: AbstractBattle) -> str:
+        return run_teampreview(self.model, battle, self.device, self.deterministic).order
 
 
 class OpponentFactory:
