@@ -38,11 +38,13 @@ class ModelConfig:
     hashed_dim: int = 16
 
 
+# 2層 ReLU MLP（各トークンのエンコーダ・出力ヘッドで共通して使う）。
 def _mlp(i: int, h: int, o: int) -> nn.Sequential:
     return nn.Sequential(nn.Linear(i, h), nn.ReLU(), nn.Linear(h, o))
 
 
 class ActorCritic(nn.Module):
+    # 各種埋め込み・トークンエンコーダ・Transformer・ポインタ型の行動ヘッドを構築する。
     def __init__(self, cfg: ModelConfig = ModelConfig()):
         super().__init__()
         self.cfg = cfg
@@ -67,6 +69,7 @@ class ActorCritic(nn.Module):
         self.gimmick_head = _mlp(3 * d, d, N_GIMMICKS)
         self.value_head = _mlp(d, d, 1)
 
+    # 生の観測ベクトルを、ポケモン/技ごとのトークンと全体文脈トークンにエンコードする。
     def _encode(self, obs: torch.Tensor):
         parts = E.split_obs(obs)
         cat = parts["pokemon_cat"].long()
@@ -130,9 +133,12 @@ class ActorCritic(nn.Module):
         value = self.value_head(ctx).squeeze(-1)
         return logits, value
 
+    # 状態価値のみを計算する（GAE のブートストラップ用）。
     def get_value(self, obs, mask):
         return self.forward(obs, mask)[1]
 
+    # 行動をサンプリング（deterministic なら argmax）し、対数確率・エントロピー・
+    # 状態価値をまとめて返す。
     def get_action_and_value(self, obs, mask, action=None, deterministic=False):
         logits, value = self.forward(obs, mask)
         dist = Categorical(logits=logits)
@@ -141,6 +147,7 @@ class ActorCritic(nn.Module):
         return action, dist.log_prob(action), dist.entropy(), value
 
 
+# モデルの重み・ModelConfig（＋任意の追加情報）を .pt ファイルに保存する。
 def save_checkpoint(path, model: ActorCritic, **extra) -> None:
     torch.save(
         {"model_state": model.state_dict(), "model_config": asdict(model.cfg), **extra},
@@ -148,6 +155,7 @@ def save_checkpoint(path, model: ActorCritic, **extra) -> None:
     )
 
 
+# チェックポイントファイルからモデル（と生の辞書データ）を読み込む。
 def load_checkpoint(path, device="cpu") -> tuple[ActorCritic, dict]:
     ckpt = torch.load(path, map_location=device, weights_only=False)
     model = ActorCritic(ModelConfig(**ckpt["model_config"])).to(device)

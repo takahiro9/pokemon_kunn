@@ -35,6 +35,7 @@ class RewardConfig:
     hp: float = 0.0
     status: float = 0.0
 
+    # （空でもよい）辞書から RewardConfig を作る。
     @classmethod
     def from_dict(cls, d: Optional[dict]) -> "RewardConfig":
         return cls(**(d or {}))
@@ -52,6 +53,7 @@ class PokemonEnv(SinglesEnv):
     random Team Preview.
     """
 
+    # 観測空間を設定し、自分側のチームプレビューをモデル駆動の版に差し替える。
     def __init__(self, *, reward: RewardConfig = RewardConfig(), **kwargs: Any):
         super().__init__(**kwargs)
         self.reward_cfg = reward
@@ -62,6 +64,8 @@ class PokemonEnv(SinglesEnv):
         self._pending_teampreview: Optional[dict] = None
         self.agent1.teampreview = self._agent1_teampreview
 
+    # 自分側エージェントのチームプレビュー処理。モデルが読み込まれていれば
+    # それで選出し、無ければ poke-env 既定のランダム選出にフォールバックする。
     def _agent1_teampreview(self, battle: AbstractBattle) -> str:
         if self._teampreview_model is None:
             return self.agent1.random_teampreview(battle)
@@ -84,9 +88,11 @@ class PokemonEnv(SinglesEnv):
         model, _ = load_checkpoint(path, self._teampreview_device)
         self._teampreview_model = model
 
+    # poke-env のフック: Battle を観測ベクトルに変換する。
     def embed_battle(self, battle: AbstractBattle) -> np.ndarray:
         return encoding.encode_battle(battle)
 
+    # poke-env のフック: RewardConfig に基づく（途中報酬込みの）報酬を計算する。
     def calc_reward(self, battle: AbstractBattle) -> float:
         r = self.reward_cfg
         return self.reward_computing_helper(
@@ -97,18 +103,23 @@ class PokemonEnv(SinglesEnv):
             victory_value=r.victory,
         )
 
+    # poke-env のフック: 行動 ID をバトルの指令に変換する。
+    # チームプレビュー中は「交代アクション＝選出」として扱う。
     @staticmethod
     def action_to_order(action, battle: Battle, fake: bool = False, strict: bool = True):
         if battle.teampreview:
             return Player.create_order(list(battle.team.values())[int(action)])
         return SinglesEnv.action_to_order(action, battle, fake=fake, strict=strict)
 
+    # poke-env のフック: 合法行動マスクを返す。チームプレビュー中は専用のマスクを使う。
     @staticmethod
     def get_action_mask(battle: Battle) -> list[int]:
         if battle.teampreview:
             return encoding.teampreview_action_mask(battle)
         return SinglesEnv.get_action_mask(battle)
 
+    # バトルをリセットし、直前にチームプレビューの選出が行われていれば
+    # 学習ループが拾えるよう infos に載せる。
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         self._pending_teampreview = None
         obs, infos = super().reset(seed, options)
@@ -130,26 +141,31 @@ class OpponentMixEnv(gym.Wrapper):
         self.mix: dict[str, float] = dict(mix)
         self.current_opponent = ""
 
+    # 対戦相手の抽選比率（と self-play プール）を差し替える（学習ループから呼ばれる）。
     def set_opponent_mix(self, mix: dict, pool: Optional[list[str]] = None) -> None:
         self.mix = dict(mix)
         if pool is not None:
             self.factory.set_pool(pool)
 
+    # チームプレビュー用モデルの再読み込みを、内側の PokemonEnv に転送する。
     def reload_teampreview(self, path: str) -> None:
         self.env.env.reload_teampreview(path)
 
+    # `mix` の重みに従って対戦相手を1体抽選し、factory から取得/生成する。
     def _sample_opponent(self) -> None:
         names, weights = zip(*[(k, v) for k, v in self.mix.items() if v > 0])
         name = random.choices(names, weights=weights)[0]
         self.env.opponent = self.factory.get(name)
         self.current_opponent = name
 
+    # 新しい対戦相手を抽選してから、内側の環境をリセットする。
     def reset(self, **kwargs):
         self._sample_opponent()
         obs, info = self.env.reset(**kwargs)
         info["opponent"] = self.current_opponent
         return obs, info
 
+    # 内側の環境を1ステップ進め、試合終了時は勝敗などを info に付与する。
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(np.int64(action))
         info = dict(info)

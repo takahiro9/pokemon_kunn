@@ -83,6 +83,7 @@ class TrainConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     curriculum: list[Stage] = field(default_factory=lambda: [Stage(None, {"random": 1.0})])
 
+    # YAML ファイルから TrainConfig を読み込む。書かれていない項目は既定値のまま。
     @classmethod
     def load(cls, path: str) -> "TrainConfig":
         raw = yaml.safe_load(Path(path).read_text()) or {}
@@ -94,6 +95,7 @@ class TrainConfig:
             cfg.curriculum = stages
         return cfg
 
+    # 現在の学習ステップに対応するカリキュラムの対戦相手比率を返す。
     def mix_at(self, step: int) -> dict:
         for s in self.curriculum:
             if s.until_step is None or step < s.until_step:
@@ -101,14 +103,17 @@ class TrainConfig:
         return self.curriculum[-1].mix
 
 
+# デバイスを決定する。CUDA があればそれを、無ければ CPU を使う
+# （ネットワークが小さく、ロールアウト中のバッチも小さいので Mac では MPS より CPU の方が速く、
+#  自動選択では MPS は選ばない）。
 def resolve_device(name: str) -> torch.device:
     if name != "auto":
         return torch.device(name)
-    # The network is small and batches are tiny during rollouts; CPU is usually
-    # as fast as MPS here, so only auto-pick CUDA.
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# PPO 学習のメインループ: ロールアウト収集 → GAE 計算 → ミニバッチ更新 →
+# ログ出力・チェックポイント保存、を num_updates 回繰り返す。
 def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
     run_dir = Path("runs") / f"{cfg.run_name}-{time.strftime('%Y%m%d-%H%M%S')}"
     ckpt_dir, pool_dir = run_dir / "checkpoints", run_dir / "pool"
@@ -166,6 +171,8 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
     pending_tp: dict[int, _PendingTP] = {}
     tp_ready: list[_PendingTP] = []
 
+    # 新しく行われたチームプレビューの選出（infos["teampreview"]）を、
+    # 環境インデックスをキーに pending_tp へ取り込む。
     def ingest_teampreview(infos: dict) -> None:
         present = infos.get("_teampreview")
         batch = infos.get("teampreview")
@@ -177,6 +184,8 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
                 logprob=batch["logprob"][i], value=batch["value"][i],
             )
 
+    # 現在のモデルを凍結して self-play プールに追加し、全環境へ配布する
+    # （対戦相手としても、チームプレビュー用ポリシーとしても使われる）。
     def snapshot() -> None:
         path = pool_dir / f"step_{global_step:09d}.pt"
         save_checkpoint(path, agent, global_step=global_step)
@@ -185,6 +194,7 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
         envs.call("set_opponent_mix", current_mix, pool)
         envs.call("reload_teampreview", str(path.resolve()))
 
+    # モデル・オプティマイザ状態・ステップ数・学習設定一式を `path` に保存する。
     def save(path: Path) -> None:
         save_checkpoint(
             path, agent, optimizer_state=optimizer.state_dict(),
@@ -369,6 +379,7 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
     return run_dir
 
 
+# CLI エントリポイント: 引数をパースして設定を読み込み、学習を実行する。
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default="configs/ppo_default.yaml")

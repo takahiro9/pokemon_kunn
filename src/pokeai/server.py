@@ -10,6 +10,7 @@ import os
 from poke_env import AccountConfiguration, ServerConfiguration
 
 
+# SHOWDOWN_HOST / SHOWDOWN_PORT 環境変数から Showdown サーバへの WebSocket 接続設定を作る。
 def server_configuration() -> ServerConfiguration:
     host = os.environ.get("SHOWDOWN_HOST", "localhost")
     port = os.environ.get("SHOWDOWN_PORT", "8000")
@@ -19,6 +20,7 @@ def server_configuration() -> ServerConfiguration:
     )
 
 
+# 指定した接頭辞から、他と衝突しないゲストアカウント名を生成する。
 def account(prefix: str) -> AccountConfiguration:
     # Showdown usernames are capped at 18 chars; rand=True appends a suffix so
     # concurrent processes / restarts never collide on a name.

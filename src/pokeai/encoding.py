@@ -64,6 +64,7 @@ UNKNOWN_ID = 0
 NONE_ID = 1  # "known to have no item / ability"
 
 
+# 種族名・技名 -> ID の対応表を作る（1 始まり。0 は不明/パディング用）。
 @lru_cache(maxsize=1)
 def _vocab() -> tuple[dict[str, int], dict[str, int]]:
     data = GenData.from_gen(GEN)
@@ -73,10 +74,12 @@ def _vocab() -> tuple[dict[str, int], dict[str, int]]:
     return species, moves
 
 
+# 種族埋め込みの語彙数（不明用の ID 0 を含む）。
 def n_species() -> int:
     return len(_vocab()[0]) + 1
 
 
+# 技埋め込みの語彙数（不明用の ID 0 を含む）。
 def n_moves() -> int:
     return len(_vocab()[1]) + 1
 
@@ -84,6 +87,8 @@ def n_moves() -> int:
 N_HASHED = HASH_BUCKETS + 2
 
 
+# (ベース種族名のハッシュ, 種族値) -> フォルム名 の対応表。
+# 種族値だけからメガシンカ後のフォルムを逆算するために使う（下の effective_species 参照）。
 @lru_cache(maxsize=1)
 def _formes_by_stats() -> dict[tuple, str]:
     table: dict[tuple, str] = {}
@@ -109,11 +114,13 @@ def effective_species(mon: Pokemon) -> str:
     return _formes_by_stats().get((base, tuple(sorted(stats.items()))), mon.species)
 
 
+# 現在のフォルム（復元済み）がメガシンカかどうか。
 def is_mega(mon: Pokemon) -> bool:
     entry = GenData.from_gen(GEN).pokedex.get(effective_species(mon), {})
     return entry.get("forme", "").startswith("Mega")
 
 
+# ポケモンの種族 ID を引く。見つからなければベース種族名で引き直す。
 def species_id(mon: Pokemon) -> int:
     species, _ = _vocab()
     sid = species.get(effective_species(mon))
@@ -122,10 +129,13 @@ def species_id(mon: Pokemon) -> int:
     return sid
 
 
+# 技の ID を引く（不明なら 0）。
 def move_id(move: Move) -> int:
     return _vocab()[1].get(move.id, UNKNOWN_ID)
 
 
+# 道具・特性の名前を HASH_BUCKETS 個の ID にハッシュする
+# （poke-env には道具・特性の ID 表が無いため）。0=不明、1=「持たない/無い」と判明済み。
 def hashed_id(value: Optional[str]) -> int:
     if value is None or value == GenData.UNKNOWN_ITEM:
         return UNKNOWN_ID
@@ -182,15 +192,19 @@ def split_obs(obs):
 # ---------------------------------------------------------------- encoding
 
 
+# `values` の固定リストに対して `item` を one-hot 化する。
 def _one_hot(values: list, item) -> list[float]:
     return [1.0 if v == item else 0.0 for v in values]
 
 
+# ポケモンのタイプ（最大2つ）を multi-hot 化する。
 def _types_vec(types) -> list[float]:
     present = {t for t in types if t is not None}
     return [1.0 if t in present else 0.0 for t in TYPES]
 
 
+# 場の状態（リフレクター、まきびし等）をエンコードする。
+# 積み重なるもの（まきびし・どくびし）は段階数で正規化する。
 def _side_vec(conditions: dict) -> list[float]:
     out = []
     for cond in SIDE_CONDITIONS:
@@ -203,6 +217,8 @@ def _side_vec(conditions: dict) -> list[float]:
     return out
 
 
+# 天候・フィールド・両陣営の場の状態・ターン数・メガシンカ使用状況・
+# 残りポケモン数などの試合全体の状態をエンコードする。
 def _encode_global(battle: AbstractBattle) -> list[float]:
     own_left = sum(not m.fainted for m in battle.team.values())
     # Unrevealed opponent Pokemon are still alive.
@@ -227,6 +243,8 @@ def _encode_global(battle: AbstractBattle) -> list[float]:
     )
 
 
+# 1体分のポケモンの数値特徴（存在/HP/状態異常フラグ、能力ランク、
+# 現在のタイプ、種族値）をエンコードする。
 def _encode_pokemon(mon: Pokemon, own: bool) -> list[float]:
     stats = mon.base_stats or {}
     return (
@@ -257,6 +275,8 @@ def champions_max_pp(move: Move) -> int:
     return int((base / 5 + 1) * 4)
 
 
+# 残り PP の割合。必要な場合は poke-env が数えている本家ルールの PP を
+# Champions ルールの上限に換算する。
 def pp_fraction(move: Move, champions: bool) -> float:
     if not move.max_pp:
         return 1.0
@@ -269,6 +289,8 @@ def pp_fraction(move: Move, champions: bool) -> float:
     return max(cap - used, 0) / cap
 
 
+# 1つの技の数値特徴（威力・命中・PP・優先度、相手へのタイプ相性、
+# タイプ一致、回復/吸収/反動、現在使えるか）をエンコードする。
 def _encode_move(
     move: Move,
     user: Pokemon,
@@ -302,6 +324,7 @@ def _encode_move(
     )
 
 
+# バトル全体を OBS_DIM 次元の観測ベクトルにエンコードする（レイアウトはモジュール冒頭の docstring 参照）。
 def encode_battle(battle: AbstractBattle) -> np.ndarray:
     obs = np.zeros(OBS_DIM, dtype=np.float32)
     obs[_O_GLOBAL:_O_PNUM] = _encode_global(battle)

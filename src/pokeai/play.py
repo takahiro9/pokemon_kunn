@@ -51,6 +51,7 @@ def resolve_server(spec: str) -> ServerConfiguration:
     )
 
 
+# チェックポイントをサーバに接続し、accept/challenge/ladder のいずれかで実際に対戦する。
 async def run(args: argparse.Namespace) -> None:
     account_configuration = (
         AccountConfiguration(args.username, args.password) if args.username else None
@@ -87,6 +88,7 @@ async def run(args: argparse.Namespace) -> None:
     )
 
 
+# CLI エントリポイント: 引数をパースして対戦セッションを実行する。
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mode", choices=["accept", "challenge", "ladder"])

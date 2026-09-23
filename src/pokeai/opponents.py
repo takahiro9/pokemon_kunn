@@ -88,6 +88,7 @@ def run_teampreview(
 class PolicyPlayer(Player):
     """Player driven by an ActorCritic (sync choose_move, usable as env opponent)."""
 
+    # 学習済みモデルで動く Player を作る（推論時間も計測する）。
     def __init__(self, model: ActorCritic, deterministic: bool = False, device="cpu", **kwargs):
         super().__init__(**kwargs)
         self.model = model
@@ -96,6 +97,7 @@ class PolicyPlayer(Player):
         self.inference_seconds = 0.0
         self.n_decisions = 0
 
+    # poke-env のフック: モデルで行動を選ぶ（合法手が無ければランダムな合法手にフォールバック）。
     @torch.no_grad()
     def choose_move(self, battle: AbstractBattle):
         mask = np.asarray(SinglesEnv.get_action_mask(battle), dtype=np.float32)
@@ -111,6 +113,7 @@ class PolicyPlayer(Player):
             np.int64(action.item()), battle, fake=False, strict=False
         )
 
+    # poke-env のフック: モデルでチームプレビューの選出を行う。
     def teampreview(self, battle: AbstractBattle) -> str:
         return run_teampreview(self.model, battle, self.device, self.deterministic).order
 
@@ -129,6 +132,7 @@ class OpponentFactory:
         self._cache: dict[str, Player] = {}
         self.pool: list[str] = []
 
+    # self-play プールを差し替え、外れたモデルのキャッシュを解放する。
     def set_pool(self, pool: list[str]) -> None:
         self.pool = list(pool)
         # Drop models that fell out of the pool so memory stays bounded.
@@ -136,8 +140,8 @@ class OpponentFactory:
         for key in [k for k in self._cache if k.startswith("ckpt:") and k not in keep]:
             del self._cache[key]
 
+    # サーバに接続しない Player を作る（環境内の相手は choose_move() だけ呼べればよい）。
     def _offline(self, cls, **kwargs) -> Player:
-        # Env opponents only need choose_move(); they never open a connection.
         return cls(
             account_configuration=account("offline"),
             battle_format=self.battle_format,
@@ -145,6 +149,7 @@ class OpponentFactory:
             **kwargs,
         )
 
+    # 名前から対戦相手を取得する（無ければ作ってキャッシュする）。
     def get(self, name: str) -> Player:
         if name in ("latest", "pool"):
             if not self.pool:
@@ -161,6 +166,7 @@ class OpponentFactory:
         return self._cache[name]
 
 
+# 評価・実戦投入用に、サーバへ接続する PolicyPlayer をチェックポイントから作る。
 def make_policy_player(
     checkpoint: str,
     battle_format: str,

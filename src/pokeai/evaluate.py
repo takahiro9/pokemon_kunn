@@ -31,6 +31,7 @@ from pokeai.server import account, server_configuration
 DEFAULT_OPPONENTS = ["random", "max_power", "heuristic"]
 
 
+# 勝率の 95% Wilson 信頼区間を計算する。
 def wilson(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
     if n == 0:
         return 0.0, 0.0
@@ -107,6 +108,7 @@ def fit_elo(names: list[str], results: dict, iters: int = 500, anchor: str | Non
     return {x: round(v + shift, 1) for x, v in sorted(elo.items(), key=lambda kv: -kv[1])}
 
 
+# チェックポイントを各ベースライン/相手と n_battles 戦させ、勝率などを報告する。
 async def benchmark(args) -> dict:
     agent = build_player(args.checkpoint[0], args.format, args.concurrency, args.deterministic)
     out = {"checkpoint": args.checkpoint[0], "deterministic": args.deterministic, "results": {}}
@@ -124,6 +126,7 @@ async def benchmark(args) -> dict:
     return out
 
 
+# 全エージェントを総当たりで対戦させ、結果から Elo レーティングを推定する。
 async def round_robin(args) -> dict:
     specs = args.checkpoint + args.opponents
     names = [Path(s).stem if s not in BASELINES else s for s in specs]
@@ -139,6 +142,7 @@ async def round_robin(args) -> dict:
     return {"pairs": table, "elo": elo}
 
 
+# CLI エントリポイント: ベンチマーク評価または総当たり評価を実行し、結果を JSON で保存する。
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("checkpoint", nargs="+", help="checkpoint path(s)")
