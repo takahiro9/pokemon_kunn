@@ -1,10 +1,10 @@
-"""Gymnasium environment around poke-env's SinglesEnv (roadmap Phase 1 step 1).
+"""poke-env の SinglesEnv を包む Gymnasium 環境（ロードマップ Phase 1 手順1）。
 
-``PokemonEnv`` adds our observation encoding and (optionally shaped) reward.
-``make_env`` builds a single-agent env whose opponent is re-sampled from an
-opponent mix at every reset, which is what the PPO trainer runs in parallel
-subprocesses. The opponent mix can be changed at runtime through
-``AsyncVectorEnv.call("set_opponent_mix", ...)`` for curriculum / self-play.
+``PokemonEnv`` はこちらの観測エンコーディングと（任意で途中報酬付きの）報酬計算を追加する。
+``make_env`` は、リセットのたびに対戦相手をオッポーネントミックスから再抽選する
+シングルエージェント環境を作る関数で、PPO トレーナーが並列サブプロセスで
+実行するのはこれ。オッポーネントミックスは実行中でも
+``AsyncVectorEnv.call("set_opponent_mix", ...)`` でカリキュラム/self-play 用に変更できる。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from pokeai.server import account, server_configuration
 
 @dataclass
 class RewardConfig:
-    """Terminal ±victory, plus optional dense shaping (roadmap 0.3, ablation)."""
+    """終局の ±victory 報酬に、任意で密な途中報酬（shaping）を加える（ロードマップ 0.3、アブレーション実験）。"""
 
     victory: float = 1.0
     fainted: float = 0.0
@@ -42,15 +42,14 @@ class RewardConfig:
 
 
 class PokemonEnv(SinglesEnv):
-    """poke-env's ``_EnvPlayer.teampreview`` only routes Team Preview through
-    learned actions for VGC; for singles it always brings a random 3 of 6
-    (see poke_env.environment.env._EnvPlayer._teampreview). We replace
-    ``agent1``'s Team Preview with a synchronous model-driven pick (mirroring
-    how ``PolicyPlayer`` already drives opponents synchronously) so it can be
-    learned, and treat the picks as ordinary switch actions (0-5) restricted
-    by ``teampreview_action_mask`` so no new model head is needed. The
-    opponent side (``agent2``) is unaffected and keeps poke-env's default
-    random Team Preview.
+    """poke-env の ``_EnvPlayer.teampreview`` は VGC でのみチームプレビューを
+    学習対象の行動として扱い、シングルバトルでは常にランダムに6匹から3匹を選ぶ
+    （poke_env.environment.env._EnvPlayer._teampreview 参照）。そこで ``agent1``
+    のチームプレビューを、（``PolicyPlayer`` が既に対戦相手を同期的に動かしている
+    のと同様の）同期的なモデル駆動の選出に差し替えて学習できるようにし、
+    選出は通常の交代アクション（0〜5）を ``teampreview_action_mask`` で
+    制限したものとして扱うので新しいモデルヘッドは不要。対戦相手側
+    （``agent2``）はこの変更の影響を受けず、poke-env 既定のランダム選出のまま。
     """
 
     # 観測空間を設定し、自分側のチームプレビューをモデル駆動の版に差し替える。
@@ -82,9 +81,9 @@ class PokemonEnv(SinglesEnv):
         return result.order
 
     def reload_teampreview(self, path: str) -> None:
-        """Refresh agent1's Team Preview policy from a checkpoint on disk
-        (called periodically from the training process, like the self-play
-        pool's checkpoints)."""
+        """agent1 のチームプレビュー用ポリシーを、ディスク上のチェックポイントから
+        再読み込みする（self-play プールのチェックポイントと同様、学習プロセスから
+        定期的に呼ばれる）。"""
         model, _ = load_checkpoint(path, self._teampreview_device)
         self._teampreview_model = model
 
@@ -129,10 +128,10 @@ class PokemonEnv(SinglesEnv):
 
 
 class OpponentMixEnv(gym.Wrapper):
-    """Single-agent view of PokemonEnv with an opponent sampled per episode.
+    """PokemonEnv をエピソードごとに対戦相手を抽選するシングルエージェント視点で包む。
 
-    Exposes a flat ``Dict(observation, action_mask)`` space (as produced by
-    PokeEnv) and reports the battle outcome in ``info`` on the final step.
+    （PokeEnv が作る）フラットな ``Dict(observation, action_mask)`` 空間を公開し、
+    最終ステップでは対戦結果を ``info`` に載せて返す。
     """
 
     def __init__(self, env: SingleAgentWrapper, factory: OpponentFactory, mix: dict):
@@ -185,7 +184,7 @@ class EnvConfig:
 
 
 def make_env(cfg: EnvConfig, index: int = 0, device: str = "cpu"):
-    """Return a thunk for gymnasium vector envs (each runs in its own process)."""
+    """gymnasium のベクトル環境用のサンク関数を返す（各環境は独自のプロセスで動く）。"""
 
     def _thunk() -> gym.Env:
         env = PokemonEnv(
@@ -194,8 +193,8 @@ def make_env(cfg: EnvConfig, index: int = 0, device: str = "cpu"):
             server_configuration=server_configuration(),
             account_configuration1=account(f"ppo{index}"),
             account_configuration2=account(f"opp{index}"),
-            # Masked policies never pick illegal actions, but fall back to a
-            # random legal move instead of crashing a long training run.
+            # マスクされたポリシーが違法な行動を選ぶことは無いはずだが、
+            # 万一来た場合は長時間の学習を落とさずランダムな合法手にフォールバックする。
             strict=False,
             start_listening=True,
         )

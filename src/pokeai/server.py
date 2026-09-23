@@ -1,8 +1,8 @@
-"""Showdown server connection settings shared by training and evaluation.
+"""学習・評価で共有する Showdown サーバへの接続設定。
 
-The host/port come from env vars so the same code works on the host
-(SHOWDOWN_HOST=localhost, the default) and inside docker compose
-(SHOWDOWN_HOST=showdown).
+ホスト/ポートは環境変数から取るので、同じコードがホスト側
+（SHOWDOWN_HOST=localhost、既定値）と docker compose 内
+（SHOWDOWN_HOST=showdown）の両方で動く。
 """
 
 import os
@@ -22,6 +22,6 @@ def server_configuration() -> ServerConfiguration:
 
 # 指定した接頭辞から、他と衝突しないゲストアカウント名を生成する。
 def account(prefix: str) -> AccountConfiguration:
-    # Showdown usernames are capped at 18 chars; rand=True appends a suffix so
-    # concurrent processes / restarts never collide on a name.
+    # Showdown のユーザー名は 18 文字までなので接頭辞は8文字に切り詰め、
+    # rand=True で接尾辞を付けて並列プロセス/再起動時の名前衝突を防ぐ。
     return AccountConfiguration.generate(prefix[:8], rand=True)

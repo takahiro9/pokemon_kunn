@@ -1,13 +1,13 @@
-"""PPO trainer (roadmap Phase 1 steps 3 & 5), CleanRL-style single file.
+"""PPO トレーナー（ロードマップ Phase 1 手順3・5）。CleanRL 風の1ファイル完結実装。
 
     uv run python -m pokeai.ppo --config configs/ppo_smoke.yaml
 
-Each run writes to ``runs/<name>-<timestamp>/``: the resolved config, TensorBoard
-logs, ``checkpoints/latest.pt`` + periodic snapshots, and the self-play pool.
+各実行は ``runs/<name>-<timestamp>/`` に、解決済みの設定・TensorBoard ログ・
+``checkpoints/latest.pt``＋定期スナップショット・self-play プールを書き出す。
 
-The opponent curriculum is a list of stages ``{until_step, mix}``; ``mix`` maps
-opponent names (see ``OpponentFactory``) to sampling weights. ``latest`` /
-``pool`` refer to our own snapshots, i.e. self-play (最新 50% + 過去 50% etc.).
+対戦相手のカリキュラムは ``{until_step, mix}`` のステージのリストで、``mix`` は
+対戦相手の名前（``OpponentFactory`` 参照）を抽選比重に対応付けたもの。``latest`` /
+``pool`` は自分自身のスナップショットを指す、つまり self-play（最新 50% + 過去 50% など）。
 """
 
 from __future__ import annotations
@@ -35,16 +35,16 @@ from pokeai.model import N_ACTIONS, ActorCritic, ModelConfig, load_checkpoint, s
 
 @dataclass
 class Stage:
-    until_step: Optional[int]  # None = until the end of training
+    until_step: Optional[int]  # None = 学習終了まで継続
     mix: dict
 
 
 @dataclass
 class _PendingTP:
-    """A Team Preview decision (TEAMPREVIEW_PICK sub-picks) awaiting its
-    episode's outcome. Rewards accumulate (discounted) from the moment the
-    picks were made until the episode ends, giving a Monte-Carlo return that
-    becomes the training target for all of that episode's picks."""
+    """エピソードの結末を待っているチームプレビューの選出（TEAMPREVIEW_PICK 回分の
+    サブ選出）。選出が行われた時点からエピソード終了まで、報酬を（割引しながら）
+    積算していき、そのエピソードの全選出に対する学習ターゲットとなる
+    モンテカルロ収益を得る。"""
 
     obs: np.ndarray
     mask: np.ndarray
@@ -77,7 +77,7 @@ class TrainConfig:
     max_grad_norm: float = 0.5
     target_kl: Optional[float] = None
     checkpoint_every_updates: int = 20
-    snapshot_every_updates: int = 20  # adds a frozen copy to the self-play pool
+    snapshot_every_updates: int = 20  # 凍結したコピーを self-play プールに追加する頻度
     pool_size: int = 20
     env: EnvConfig = field(default_factory=EnvConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -164,10 +164,10 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
     ep_returns = np.zeros(cfg.num_envs)
     return_hist: deque = deque(maxlen=200)
 
-    # Team Preview decisions (env.PokemonEnv._agent1_teampreview) are made
-    # once per episode, outside the regular obs/action/reward step loop, so
-    # they're tracked separately here and folded into the PPO batch as
-    # Monte-Carlo-return transitions once their episode finishes (see below).
+    # チームプレビューの選出（env.PokemonEnv._agent1_teampreview）はエピソードに
+    # つき1回、通常の観測/行動/報酬のステップループの外で行われるので、ここで
+    # 別途トラッキングし、そのエピソードが終わった時点でモンテカルロ収益の
+    # 遷移として PPO のバッチに合流させる（下記参照）。
     pending_tp: dict[int, _PendingTP] = {}
     tp_ready: list[_PendingTP] = []
 
@@ -201,7 +201,7 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
             global_step=global_step, train_config=dataclasses.asdict(cfg),
         )
 
-    snapshot()  # pool is never empty, so "latest"/"pool" always resolve
+    snapshot()  # プールを空にしないことで "latest"/"pool" が必ず解決できるようにする
     next_obs, next_infos = envs.reset(seed=cfg.seed)
     ingest_teampreview(next_infos)
     next_o = torch.as_tensor(next_obs["observation"], device=device)
@@ -250,7 +250,7 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
                     tp_ready.append(pending_tp.pop(int(i)))
             ingest_teampreview(infos)
 
-        # GAE
+        # GAE（Generalized Advantage Estimation）の計算
         with torch.no_grad():
             next_value = agent.get_value(next_o, next_m)
             advantages = torch.zeros_like(rewards)
@@ -271,10 +271,10 @@ def train(cfg: TrainConfig, resume: Optional[str] = None) -> Path:
         b_actions, b_logprobs = actions.reshape(-1), logprobs.reshape(-1)
         b_adv, b_returns, b_values = advantages.reshape(-1), returns.reshape(-1), values.reshape(-1)
 
-        # Team Preview picks: episodes that finished during this update's
-        # rollout contribute Monte-Carlo-return transitions (advantage =
-        # return - value, i.e. GAE with lambda=1 for just these steps) into
-        # the same batch, reusing the switch head/value head unchanged.
+        # チームプレビューの選出: 今回の更新のロールアウト中に終了したエピソードは、
+        # モンテカルロ収益の遷移（アドバンテージ = 収益 − 価値、つまりこのステップだけ
+        # λ=1 の GAE 相当）として同じバッチに合流させ、交代ヘッド/価値ヘッドは
+        # 変更せずそのまま使う。
         n_tp = len(tp_ready) * encoding.TEAMPREVIEW_PICK
         if tp_ready:
             tp_obs = torch.as_tensor(np.concatenate([tp.obs for tp in tp_ready]), device=device)

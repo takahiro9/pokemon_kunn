@@ -1,7 +1,7 @@
-"""Opponents: poke-env baselines and frozen policies (self-play pool).
+"""対戦相手: poke-env のベースラインと凍結ポリシー（self-play プール）。
 
-``PolicyPlayer`` is also the object we evaluate against the benchmarks, so
-training-time opponents and evaluated agents share one inference path.
+``PolicyPlayer`` はベンチマーク評価の対象そのものでもあるので、
+学習時の対戦相手と評価対象のエージェントは同じ推論経路を共有する。
 """
 
 from __future__ import annotations
@@ -35,13 +35,13 @@ BASELINES = {
 
 @dataclass
 class TeampreviewResult:
-    """One Team Preview decision: the ``/team`` order plus the per-pick
-    transitions (own Pokemon slot chosen, in order) for training."""
+    """1回分のチームプレビュー選出: ``/team`` の指令文字列と、
+    学習用の選出ごとの遷移（選ばれた自分のポケモンのスロット、順番通り）。"""
 
     order: str
     obs: np.ndarray  # (TEAMPREVIEW_PICK, OBS_DIM)
     mask: np.ndarray  # (TEAMPREVIEW_PICK, N_ACTIONS)
-    action: np.ndarray  # (TEAMPREVIEW_PICK,) int64, own-team slot indices
+    action: np.ndarray  # (TEAMPREVIEW_PICK,) int64、自分のチーム内スロット番号
     logprob: np.ndarray  # (TEAMPREVIEW_PICK,)
     value: np.ndarray  # (TEAMPREVIEW_PICK,)
 
@@ -50,10 +50,10 @@ class TeampreviewResult:
 def run_teampreview(
     model: ActorCritic, battle: AbstractBattle, device="cpu", deterministic: bool = False
 ) -> TeampreviewResult:
-    """Pick TEAMPREVIEW_PICK of our 6 Pokemon (in lead order) via the model's
-    switch head, reusing the normal switch-action distribution: masked down to
-    not-yet-picked own Pokemon and re-run TEAMPREVIEW_PICK times, marking each
-    pick as ``_selected_in_teampreview`` before the next so the mask/obs shrink."""
+    """モデルの交代ヘッドを使って、6匹のうち TEAMPREVIEW_PICK 匹を（先発順込みで）選ぶ。
+    通常の交代アクション分布をそのまま流用し、まだ選んでいない自分のポケモンだけに
+    マスクした上で TEAMPREVIEW_PICK 回繰り返す。次の回の前に選出済みのポケモンを
+    ``_selected_in_teampreview`` としてマークし、マスク/観測を更新していく。"""
     team = list(battle.team.values())
     obs_list, mask_list, actions, logprobs, values = [], [], [], [], []
     picks: list[int] = []
@@ -86,7 +86,7 @@ def run_teampreview(
 
 
 class PolicyPlayer(Player):
-    """Player driven by an ActorCritic (sync choose_move, usable as env opponent)."""
+    """ActorCritic で動く Player（choose_move が同期的で、env の対戦相手としても使える）。"""
 
     # 学習済みモデルで動く Player を作る（推論時間も計測する）。
     def __init__(self, model: ActorCritic, deterministic: bool = False, device="cpu", **kwargs):
@@ -119,11 +119,11 @@ class PolicyPlayer(Player):
 
 
 class OpponentFactory:
-    """Builds (and caches) opponents by name.
+    """名前から対戦相手を生成（＆キャッシュ）する。
 
-    Names: ``random`` / ``max_power`` / ``heuristic`` (poke-env baselines),
-    ``latest`` (newest self-play snapshot), ``pool`` (a random snapshot from
-    the self-play pool, re-drawn each episode) and ``ckpt:<path>``.
+    名前: ``random`` / ``max_power`` / ``heuristic``（poke-env のベースライン）、
+    ``latest``（最新の self-play スナップショット）、``pool``（self-play プールから
+    エピソードごとに再抽選するスナップショット）、``ckpt:<path>``。
     """
 
     def __init__(self, battle_format: str, device: str = "cpu"):
@@ -135,7 +135,7 @@ class OpponentFactory:
     # self-play プールを差し替え、外れたモデルのキャッシュを解放する。
     def set_pool(self, pool: list[str]) -> None:
         self.pool = list(pool)
-        # Drop models that fell out of the pool so memory stays bounded.
+        # プールから外れたモデルはキャッシュから外し、メモリ使用量を抑える。
         keep = {"ckpt:" + p for p in self.pool}
         for key in [k for k in self._cache if k.startswith("ckpt:") and k not in keep]:
             del self._cache[key]

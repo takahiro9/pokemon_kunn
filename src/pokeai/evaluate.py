@@ -1,15 +1,15 @@
-"""Benchmark evaluation (roadmap 0.2 共通評価プロトコル).
+"""ベンチマーク評価（ロードマップ 0.2 共通評価プロトコル）。
 
-Win rate with a 95% Wilson interval, mean battle length and per-move inference
-time of a checkpoint against the fixed baselines:
+固定のベースライン相手に対する、チェックポイントの勝率（95% Wilson 信頼区間付き）・
+平均バトル長・1手あたりの推論時間:
 
     uv run python -m pokeai.evaluate runs/<run>/checkpoints/latest.pt -n 500
 
-Round robin + Elo between several agents (checkpoints and/or baselines):
+複数エージェント（チェックポイント/ベースライン）の総当たり戦＋Elo:
 
     uv run python -m pokeai.evaluate --round-robin a.pt b.pt heuristic -n 200
 
-Results are printed and written as JSON next to the (first) checkpoint.
+結果は表示された上で、（最初の）チェックポイントと同じ場所に JSON として保存される。
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def wilson(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
 
 
 def build_player(spec: str, fmt: str, concurrency: int, deterministic: bool) -> Player:
-    """``spec`` is a baseline name or a checkpoint path."""
+    """``spec`` はベースライン名またはチェックポイントのパス。"""
     if spec in BASELINES:
         return BASELINES[spec](
             account_configuration=account(spec),
@@ -58,7 +58,7 @@ def build_player(spec: str, fmt: str, concurrency: int, deterministic: bool) -> 
 
 
 async def play(p1: Player, p2: Player, n: int) -> dict:
-    """p1 vs p2 for n battles; stats are from p1's point of view."""
+    """p1 vs p2 を n 試合対戦させる。統計は p1 視点。"""
     p1.reset_battles()
     p2.reset_battles()
     if isinstance(p1, PolicyPlayer):
@@ -82,12 +82,12 @@ async def play(p1: Player, p2: Player, n: int) -> dict:
 
 
 def fit_elo(names: list[str], results: dict, iters: int = 500, anchor: str | None = None) -> dict:
-    """Bradley-Terry fit (MM updates) of pairwise results, mapped to the Elo scale.
+    """総当たり結果への Bradley-Terry フィット（MM 更新）を Elo スケールに変換する。
 
-    ``results[(a, b)] = (wins_of_a, n)``. Ratings are centred on 1500, or
-    ``anchor`` (e.g. ``random``) is pinned to 1000 when present.
+    ``results[(a, b)] = (wins_of_a, n)``。レーティングは 1500 を中心にするか、
+    ``anchor``（例: ``random``）が与えられていればそれを 1000 に固定する。
     """
-    wins = {x: 0.5 for x in names}  # +0.5 prior keeps unbeaten agents finite
+    wins = {x: 0.5 for x in names}  # +0.5 の事前分布で無敗のエージェントも有限値にする
     games: dict[tuple[str, str], int] = {}
     for (a, b), (w, n) in results.items():
         wins[a] += w

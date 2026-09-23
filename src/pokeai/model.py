@@ -1,15 +1,16 @@
-"""Actor-critic network (roadmap Phase 1 設計).
+"""Actor-critic ネットワーク（ロードマップ Phase 1 設計）。
 
-Pokemon tokens (embeddings + numeric features + pooled move tokens) are mixed
-with a global-field token by a small Transformer encoder. Action logits are
-produced "pointer style" so each action is scored from the token it refers to:
+ポケモンごとのトークン（埋め込み＋数値特徴＋プーリングした技トークン）を、
+場の状態を表すグローバルトークンと合わせて小さな Transformer エンコーダで混ぜる。
+行動のロジットは「ポインタ型」で作る。つまり各行動は、その行動が指すトークンから
+採点される:
 
-* switch i  (actions 0-5)   <- our Pokemon token i
-* move j    (actions 6-9)   <- move token j of our active Pokemon + context
-* gimmick g (actions 10-25) <- same move token + a per-gimmick head
-  (poke-env's layout; in Champions only mega = actions 10-13 is ever legal)
+* 交代 i    （アクション 0-5）  <- 自分のポケモン i のトークン
+* 技 j      （アクション 6-9）  <- 場にいるポケモンの技 j のトークン＋文脈
+* ギミック g（アクション 10-25）<- 同じ技トークン＋ギミックごとのヘッド
+  （poke-env のレイアウト。Champions ではメガシンカ＝アクション 10-13 のみが常に合法）
 
-Invalid actions are masked out before the softmax.
+使えない行動は softmax の前にマスクして除外する。
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from torch.distributions import Categorical
 from pokeai import encoding as E
 
 N_ACTIONS = 26  # SinglesEnv.get_action_space_size(9)
-N_GIMMICKS = 4  # mega, z-move, dynamax, tera
+N_GIMMICKS = 4  # メガシンカ, Z技, ダイマックス, テラスタル
 MASK_VALUE = -1e9
 
 
@@ -105,7 +106,7 @@ class ActorCritic(nn.Module):
         return h[:, 0], h[:, 1 : 1 + E.N_TEAM], move_tok, pnum
 
     def forward(self, obs: torch.Tensor, mask: torch.Tensor):
-        """Return (masked logits (B, 26), value (B,))."""
+        """(マスク済みロジット (B, 26), 状態価値 (B,)) を返す。"""
         ctx, own_tok, move_tok, pnum = self._encode(obs)
         b, d = ctx.shape
 
@@ -113,7 +114,7 @@ class ActorCritic(nn.Module):
             torch.cat([own_tok, ctx.unsqueeze(1).expand(-1, E.N_TEAM, -1)], -1)
         ).squeeze(-1)  # (B, 6)
 
-        # Move actions refer to our active Pokemon's moves.
+        # 技アクションは場にいる自分のポケモンの技を指す。
         active = pnum[:, : E.N_TEAM, E.PNUM_ACTIVE]  # (B, 6)
         active_idx = active.argmax(1)
         has_active = (active.sum(1) > 0).float().view(b, 1, 1)

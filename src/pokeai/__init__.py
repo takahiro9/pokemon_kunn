@@ -1,1 +1,1 @@
-"""Pokemon battle AI (roadmap Phase 0/1: environment, evaluation, PPO)."""
+"""ポケモンバトル AI（ロードマップ Phase 0/1: 対戦環境・評価・PPO）。"""

@@ -1,23 +1,22 @@
-"""Battle -> fixed-size observation vector (roadmap 0.3 観測エンコーディング).
+"""バトル状態 -> 固定長の観測ベクトルへの変換（ロードマップ 0.3 観測エンコーディング）。
 
-Target format: [Gen 9 Champions] Random Battle (``gen9championsrandombattle``),
-i.e. Pokemon Champions singles mechanics: Mega Evolution but no Terastal, and
-move PP capped at 20 with Champions' own PP formula.
+対象フォーマット: [Gen 9 Champions] Random Battle（``gen9championsrandombattle``）、
+すなわち Pokemon Champions のシングルバトル仕様（メガシンカありテラスタルなし、
+技の PP は Champions 独自の計算式で最大 20 にキャップ）。
 
-The observation is a flat float32 vector so it fits a gymnasium Box and can be
-batched cheaply, but it is laid out in named blocks that ``split_obs`` turns
-back into tensors for the model:
+観測は gymnasium の Box にそのまま収まり安価にバッチ化できるよう、
+flat な float32 ベクトルにしているが、``split_obs`` でモデル用のテンソルに
+戻せるよう名前付きブロックとして並べている:
 
     [GLOBAL] [POKEMON_NUM x 12] [POKEMON_CAT x 12] [MOVE_NUM x 12 x 4]
 
-Pokemon slots 0-5 are our team in ``battle.team`` order (which is the order
-SinglesEnv uses for switch actions 0-5), slots 6-11 are the opponent Pokemon
-revealed so far. Move slots follow ``pokemon.moves`` order (which is the order
-SinglesEnv uses for move actions 6-9), so the model can point at the exact
-move/switch an action refers to.
+ポケモンのスロット 0〜5 は ``battle.team`` の順（SinglesEnv の交代アクション
+0〜5 と同じ順）の自分のチーム、6〜11 はこれまでに判明した相手のポケモン。
+技のスロットは ``pokemon.moves`` の順（SinglesEnv の技アクション 6〜9 と同じ順）
+に並べており、モデルがある行動がどの技・どの交代先を指すかを直接参照できる。
 
-Categorical ids (species, item, ability, move) are stored as floats in the
-vector and embedded by the model. Id 0 = padding / unknown.
+カテゴリ ID（種族・道具・特性・技）はベクトル内では float として保持され、
+モデル側で埋め込みベクトルに変換される。ID 0 はパディング/不明を表す。
 """
 
 from __future__ import annotations
@@ -46,8 +45,8 @@ CHAMPIONS_PP_CAP = 20
 N_TEAM = 6
 N_SLOTS = 2 * N_TEAM
 N_MOVES = 4
-TEAMPREVIEW_PICK = 3  # Champions Flat Rules: bring 6, pick 3
-N_ACTIONS = 26  # SinglesEnv.get_action_space_size(9): 6 switches + 4 moves x 5 (plain + 4 gimmicks)
+TEAMPREVIEW_PICK = 3  # Champions Flat Rules: 6匹選出して3匹使用
+N_ACTIONS = 26  # SinglesEnv.get_action_space_size(9): 交代6 + 技4 x 5(通常+ギミック4種)
 
 TYPES = list(PokemonType)
 STATUSES = list(Status)
@@ -59,16 +58,16 @@ BOOST_KEYS = ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"]
 STAT_KEYS = ["hp", "atk", "def", "spa", "spd", "spe"]
 STACKABLE = {SideCondition.SPIKES: 3, SideCondition.TOXIC_SPIKES: 2}
 
-HASH_BUCKETS = 1024  # items / abilities: poke-env ships no id table for them
+HASH_BUCKETS = 1024  # 道具・特性: poke-env に ID 表が無いためハッシュで割り当てる
 UNKNOWN_ID = 0
-NONE_ID = 1  # "known to have no item / ability"
+NONE_ID = 1  # 「道具・特性を持たないと判明済み」を表す
 
 
 # 種族名・技名 -> ID の対応表を作る（1 始まり。0 は不明/パディング用）。
 @lru_cache(maxsize=1)
 def _vocab() -> tuple[dict[str, int], dict[str, int]]:
     data = GenData.from_gen(GEN)
-    # 0 = pad/unknown; real entries start at 1.
+    # 0 はパディング/不明。実際のエントリは 1 から始まる。
     species = {k: i + 1 for i, k in enumerate(sorted(data.pokedex))}
     moves = {k: i + 1 for i, k in enumerate(sorted(data.moves))}
     return species, moves
@@ -99,11 +98,11 @@ def _formes_by_stats() -> dict[tuple, str]:
 
 
 def effective_species(mon: Pokemon) -> str:
-    """Species id including in-battle formes.
+    """戦闘中のフォルム変化を反映した種族名。
 
-    poke-env keeps ``species`` at the base forme when an *opponent* Mega
-    Evolves (only types/stats/ability are updated), so recover the forme from
-    the base stats in that case.
+    *相手* がメガシンカした場合、poke-env は ``species`` をベースフォルムの
+    ままにする（タイプ・種族値・特性だけが更新される）ため、その場合は
+    種族値からフォルムを逆算して復元する。
     """
     dex = GenData.from_gen(GEN).pokedex
     entry = dex.get(mon.species)
@@ -144,24 +143,24 @@ def hashed_id(value: Optional[str]) -> int:
     return 2 + zlib.crc32(value.encode()) % HASH_BUCKETS
 
 
-# ---------------------------------------------------------------- layout
+# ---------------------------------------------------------------- レイアウト
 
 GLOBAL_DIM = (
     len(WEATHERS)
     + len(FIELDS)
     + 2 * len(SIDE_CONDITIONS)
-    + 10  # turn, can_mega, used_mega, opp_used_mega, remaining x2, force_switch, trapped, wait, teampreview
+    + 10  # ターン数, メガシンカ可能/使用済み(自分), 相手使用済み, 残りポケモン数x2, 強制交代中, 交代不可, 行動待ち, チームプレビュー中
 )
 POKEMON_NUM_DIM = (
-    9  # present, own, active, fainted, hp, revealed, is_mega, level, selected_in_teampreview
+    9  # 存在, 自分か, 場にいるか, ひんしか, HP割合, 判明済みか, メガ済みか, レベル, チームプレビュー選出済みか
     + len(STATUSES)
     + len(BOOST_KEYS)
-    + len(TYPES)  # current types (updated on Mega Evolution)
-    + len(STAT_KEYS)  # base stats (updated on Mega Evolution)
+    + len(TYPES)  # 現在のタイプ（メガシンカで更新される）
+    + len(STAT_KEYS)  # 種族値（メガシンカで更新される）
 )
-POKEMON_CAT_DIM = 3 + N_MOVES  # species, item, ability, move ids
+POKEMON_CAT_DIM = 3 + N_MOVES  # 種族, 道具, 特性, 技の各ID
 MOVE_NUM_DIM = (
-    11  # present, bp, acc, pp, priority, effectiveness, stab, heal, drain, recoil, available
+    11  # 存在, 威力, 命中, PP, 優先度, 相性, タイプ一致, 回復, 吸収, 反動, 使用可能か
     + len(CATEGORIES)
     + len(TYPES)
 )
@@ -172,14 +171,14 @@ _O_PCAT = _O_PNUM + N_SLOTS * POKEMON_NUM_DIM
 _O_MNUM = _O_PCAT + N_SLOTS * POKEMON_CAT_DIM
 OBS_DIM = _O_MNUM + N_SLOTS * N_MOVES * MOVE_NUM_DIM
 
-# Index of the "active" flag inside a pokemon's numeric block (used by the model
-# to find which of our slots the move actions refer to).
+# ポケモンの数値ブロック内での「場にいるか」フラグの位置
+# （技アクションがどの自分のスロットを指すかをモデルが判定するのに使う）。
 PNUM_PRESENT = 0
 PNUM_ACTIVE = 2
 
 
+# (batch, OBS_DIM) の配列/テンソルを名前付きブロックに分割する。
 def split_obs(obs):
-    """Split a (batch, OBS_DIM) array/tensor into its named blocks."""
     b = obs.shape[0]
     return {
         "global": obs[:, _O_GLOBAL:_O_PNUM],
@@ -189,7 +188,7 @@ def split_obs(obs):
     }
 
 
-# ---------------------------------------------------------------- encoding
+# ---------------------------------------------------------------- エンコーディング
 
 
 # `values` の固定リストに対して `item` を one-hot 化する。
@@ -221,7 +220,7 @@ def _side_vec(conditions: dict) -> list[float]:
 # 残りポケモン数などの試合全体の状態をエンコードする。
 def _encode_global(battle: AbstractBattle) -> list[float]:
     own_left = sum(not m.fainted for m in battle.team.values())
-    # Unrevealed opponent Pokemon are still alive.
+    # まだ判明していない相手のポケモンは生きているものとして数える。
     opp_left = N_TEAM - sum(m.fainted for m in battle.opponent_team.values())
     return (
         [1.0 if w in battle.weather else 0.0 for w in WEATHERS]
@@ -267,8 +266,8 @@ def _encode_pokemon(mon: Pokemon, own: bool) -> list[float]:
 
 
 def champions_max_pp(move: Move) -> int:
-    """Max PP under Champions rules (data/mods/champions/scripts.ts):
-    base PP capped at 20, then (pp / 5 + 1) * 4 unless the move has noPPBoosts."""
+    """Champions ルールでの最大 PP（data/mods/champions/scripts.ts 準拠）:
+    ベース PP を 20 でキャップした上で、noPPBoosts が無ければ (pp / 5 + 1) * 4。"""
     base = min(move.entry.get("pp", 1), CHAMPIONS_PP_CAP)
     if move.entry.get("noPPBoosts"):
         return base
@@ -282,8 +281,8 @@ def pp_fraction(move: Move, champions: bool) -> float:
         return 1.0
     if not champions:
         return move.current_pp / move.max_pp
-    # poke-env counts PP down from its own (mainline) max, so convert the
-    # number of uses to the Champions max.
+    # poke-env は本家ルールの最大 PP を基準に数を減らしていくので、
+    # 使用回数を Champions ルールの最大 PP に換算し直す。
     used = move.max_pp - move.current_pp
     cap = champions_max_pp(move)
     return max(cap - used, 0) / cap
@@ -300,7 +299,7 @@ def _encode_move(
 ) -> list[float]:
     try:
         effectiveness = target.damage_multiplier(move) if target is not None else 1.0
-    except Exception:  # unknown type chart entries (e.g. "???" type)
+    except Exception:  # タイプ相性表に無いタイプ（"???" 等）
         effectiveness = 1.0
     eff = float(np.log2(effectiveness)) / 2.0 if effectiveness > 0 else -1.5
     accuracy = 1.0 if move.accuracy is True else float(move.accuracy)
@@ -357,8 +356,8 @@ def encode_battle(battle: AbstractBattle) -> np.ndarray:
 
 
 def teampreview_action_mask(battle: AbstractBattle) -> list[int]:
-    """Action mask for a Team Preview pick: only switch slots (actions 0-5)
-    for own Pokemon not yet selected this preview are legal."""
+    """チームプレビュー選出時のアクションマスク: まだ選んでいない自分のポケモン
+    に対応する交代アクション（0〜5）のみを合法とする。"""
     own = list(battle.team.values())[:N_TEAM]
     switches = [int(not mon.selected_in_teampreview) for mon in own]
     switches += [0] * (N_TEAM - len(switches))

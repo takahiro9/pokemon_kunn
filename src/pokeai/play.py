@@ -1,28 +1,27 @@
-"""Deploy a trained checkpoint onto a real Pokémon Showdown server so it can
-actually battle — a human in the browser, a specific opponent, or the ladder.
+"""学習済みチェックポイントを実際の Pokémon Showdown サーバに接続し、
+実戦（ブラウザからの人間、特定の相手、ラダー）で戦わせる。
 
-Unlike ``evaluate.py`` (scripted bot-vs-bot benchmarks), this drives a single
-``PolicyPlayer`` connection that waits for or initiates real battles:
+``evaluate.py``（スクリプト同士の自動対戦ベンチマーク）とは異なり、
+1つの ``PolicyPlayer`` 接続で実際の対戦を待ち受け／開始する:
 
-    # Wait in the local Docker server for a human to challenge it in the
-    # browser (http://localhost:8000). Prints the bot's username to type
-    # into the challenge box; pick the same battle_format there.
+    # ローカルの Docker サーバで、ブラウザ（http://localhost:8000）からの
+    # 人間の挑戦を待つ。ボットのユーザー名を表示するので、挑戦ボックスに
+    # 入力し、同じ battle_format を選ぶ。
     uv run python -m pokeai.play accept runs/<run>/checkpoints/latest.pt
 
-    # Challenge a specific user (e.g. a second local client you're playing
-    # from) n times.
+    # 特定のユーザー（例: 自分が操作するもう1つのローカルクライアント）に
+    # n 回挑戦する。
     uv run python -m pokeai.play challenge runs/<run>/checkpoints/latest.pt SomeUsername -n 3
 
-    # Ladder n games.
+    # n 試合ラダーに潜る。
     uv run python -m pokeai.play ladder runs/<run>/checkpoints/latest.pt -n 10
 
-By default this connects to the local server via ``pokeai.server``
-(``SHOWDOWN_HOST``/``SHOWDOWN_PORT``, same as training/evaluate.py) using the
-trained custom format, since that format (Lv50 Flat Rules) only exists
-there. Pass ``--server showdown`` to instead play on the public
-play.pokemonshowdown.com with a real (registered) ``--username``/
-``--password`` and a format that actually exists there, e.g.
-``--format gen9randombattle``.
+既定では ``pokeai.server`` 経由でローカルサーバ（``SHOWDOWN_HOST``/
+``SHOWDOWN_PORT``、学習・評価と同じ）に、学習用のカスタムフォーマットで接続する
+（Lv50 Flat Rules フォーマットはそこにしか存在しないため）。代わりに公開の
+play.pokemonshowdown.com で遊ぶ場合は ``--server showdown`` を指定し、
+実在する（登録済みの）``--username``/``--password`` と、向こうに実在する
+フォーマット（例: ``--format gen9randombattle``）を指定する。
 """
 
 from __future__ import annotations
@@ -38,8 +37,8 @@ from pokeai.server import server_configuration as local_server_configuration
 
 
 def resolve_server(spec: str) -> ServerConfiguration:
-    """``"local"`` (default, ``pokeai.server``), ``"showdown"`` (the public
-    server) or an explicit ``host[:port]`` of another Showdown server."""
+    """``"local"``（既定、``pokeai.server``）、``"showdown"``（公開サーバ）、
+    または他の Showdown サーバの明示的な ``host[:port]``。"""
     if spec == "local":
         return local_server_configuration()
     if spec == "showdown":
